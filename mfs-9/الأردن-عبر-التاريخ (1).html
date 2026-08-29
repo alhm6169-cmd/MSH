@@ -265,7 +265,7 @@
     position:relative; width:100%; max-width:280px; margin:0 auto;
     aspect-ratio:9/16; border-radius:12px; overflow:hidden; box-shadow:var(--shadow);
   }
-  .reward-video iframe{position:absolute; inset:0; width:100%; height:100%; border:0;}
+  .reward-video video, .reward-video iframe{position:absolute; inset:0; width:100%; height:100%; border:0; object-fit:cover;}
 
   footer{
     text-align:center; padding:22px; font-size:.78rem; color:var(--brown-text); opacity:.6;
@@ -524,7 +524,7 @@ let quizAnswers = [];
 let quizIndex = 0;
 let quizScore = 0;
 let quizEra = "الكل";
-let quizCount = "all";
+let quizCount = "10";
 let quizAnswered = false;
 
 async function loadHistory(){
@@ -580,7 +580,7 @@ function overallAverage(){
 function renderQuizSetup(){
   const host = document.getElementById("quizHost");
   const eligible = buildQuestionPool(quizEra).length;
-  const countOptions = [5,10,15,20,30].filter(n=>n<eligible);
+  const countOptions = [5,10,15,20,30,40,50].filter(n=>n<eligible);
   host.innerHTML = `
     <div class="quiz-setup">
       <h2 class="display" style="color:var(--ink); margin-bottom:6px;">اختبر معلوماتك</h2>
@@ -605,7 +605,9 @@ function renderQuizSetup(){
   sel.value = quizEra;
   sel.addEventListener("change", ()=>{ quizEra = sel.value; renderQuizSetup(); });
   const countSel = document.getElementById("quizCountSelect");
-  if(!countOptions.includes(Number(quizCount)) && quizCount!=="all") quizCount = "all";
+  if(!countOptions.includes(Number(quizCount)) && quizCount!=="all") {
+    quizCount = countOptions.length > 0 ? String(countOptions[0]) : "all";
+  }
   countSel.value = quizCount;
   countSel.addEventListener("change", ()=>{ quizCount = countSel.value; });
   document.getElementById("startQuizBtn").addEventListener("click", startQuiz);
@@ -643,16 +645,52 @@ function startQuiz(){
     const type = types[Math.floor(Math.random()*types.length)];
     const correct = type==="hijri" ? item.hijri : item.greg;
 
-    // distractor candidates: same field AND same kind (event date vs. person lifespan), from the whole dataset
-    let candidates = DATA
-      .filter(d=> d.n!==item.n && possibleTypesFor(d).includes(type) && !!d.isPerson === !!item.isPerson)
-      .map(d=> type==="hijri" ? d.hijri : d.greg);
+    const correctYear = parseInt((correct.match(/\\d+/) || ["0"])[0], 10);
+    const isRange = correct.includes("-");
+    
+    // distractor candidates: same field AND same kind, prioritizing same era and close dates
+    let candidatesData = DATA.filter(d => {
+      if (d.n === item.n) return false;
+      if (!possibleTypesFor(d).includes(type)) return false;
+      if (!!d.isPerson !== !!item.isPerson) return false;
+      const val = type === "hijri" ? d.hijri : d.greg;
+      if (val.includes("-") !== isRange) return false;
+      return true;
+    });
+    
+    candidatesData.sort((a, b) => {
+      let scoreA = 0, scoreB = 0;
+      
+      const valA = type === "hijri" ? a.hijri : a.greg;
+      const valB = type === "hijri" ? b.hijri : b.greg;
+      const yearA = parseInt((valA.match(/\\d+/) || ["0"])[0], 10);
+      const yearB = parseInt((valB.match(/\\d+/) || ["0"])[0], 10);
+      const diffA = Math.abs(yearA - correctYear);
+      const diffB = Math.abs(yearB - correctYear);
+
+      // التقارب الزمني هو الأهم (بحد أقصى 150 نقطة للتواريخ القريبة جداً)
+      scoreA += Math.max(0, 150 - diffA);
+      scoreB += Math.max(0, 150 - diffB);
+
+      // بونص إضافي لنفس العصر، بس أقل تأثير من التقارب الزمني
+      if (a.era === item.era) scoreA += 40;
+      if (b.era === item.era) scoreB += 40;
+      
+      scoreA += Math.random() * 20;
+      scoreB += Math.random() * 20;
+      
+      return scoreB - scoreA;
+    });
+
+    let candidates = candidatesData.map(d=> type==="hijri" ? d.hijri : d.greg);
     candidates = [...new Set(candidates)].filter(v=>v!==correct);
-    for(let i=candidates.length-1;i>0;i--){
+    
+    let bestCandidates = candidates.slice(0, 8);
+    for(let i=bestCandidates.length-1;i>0;i--){
       const j = Math.floor(Math.random()*(i+1));
-      [candidates[i],candidates[j]] = [candidates[j],candidates[i]];
+      [bestCandidates[i],bestCandidates[j]] = [bestCandidates[j],bestCandidates[i]];
     }
-    const distractors = candidates.slice(0,3);
+    const distractors = bestCandidates.slice(0,3);
     while(distractors.length<3){
       const fake = fakeValueLike(correct);
       if(fake!==correct && !distractors.includes(fake)) distractors.push(fake);
